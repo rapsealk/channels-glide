@@ -610,6 +610,14 @@ class GlideChannelLayer(BaseChannelLayer):
 
     def deserialize(self, message: bytes) -> dict[str, Any]:
         """Strip the uniqueness prefix and decode the message."""
-        decoded = msgpack.unpackb(message[_RANDOM_PREFIX_LENGTH:], raw=False)
+        try:
+            decoded = msgpack.unpackb(message[_RANDOM_PREFIX_LENGTH:], raw=False)
+        except Exception:
+            logger.error(
+                "deserialize failed: content[:48]=%r prefix_len=%d",
+                message[:48],
+                _RANDOM_PREFIX_LENGTH,
+            )
+            raise
         assert isinstance(decoded, dict)
         return decoded
