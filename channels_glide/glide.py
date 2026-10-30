@@ -275,9 +275,8 @@ class GlideChannelLayer(BaseChannelLayer):
         )
         # Check the size of the set before sending; leaking slightly over
         # capacity is fine.
-        if await client.zcount(channel_key, InfBound.NEG_INF, InfBound.POS_INF) >= self.get_capacity(
-            channel
-        ):
+        count = await client.zcount(channel_key, InfBound.NEG_INF, InfBound.POS_INF)
+        if count >= self.get_capacity(channel):
             raise ChannelFull()
         # Add the message then set the key to expire in case it's not consumed
         await client.zadd(channel_key, {self.serialize(message): time.time()})
