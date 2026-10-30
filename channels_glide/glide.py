@@ -14,6 +14,7 @@ import datetime
 import functools
 import logging
 import time
+import urllib.parse
 import uuid
 from collections.abc import Mapping
 from typing import Any
@@ -28,6 +29,7 @@ from glide import (
     RangeByIndex,
     ScoreBoundary,
     Script,
+    ServerCredentials,
 )
 
 __all__ = ["GlideChannelLayer"]
@@ -190,20 +192,47 @@ class GlideChannelLayer(BaseChannelLayer):
         self.receive_clean_locks = ChannelLock()
 
     def _build_client(self) -> GlideClient:
-        addresses = []
+        addresses: list[NodeAddress] = []
+        credentials = None
         for host in self.hosts:
             if isinstance(host, dict):
-                node = NodeAddress(
-                    str(host.get("host", host.get("address", "localhost"))),
-                    int(host.get("port", 6379)),
-                )
+                if "address" in host and isinstance(host["address"], str):
+                    parsed = self._parse_url(host["address"])
+                    address, url_credentials = parsed
+                    credentials = url_credentials or credentials
+                else:
+                    address = NodeAddress(
+                        str(host.get("host", "localhost")),
+                        int(host.get("port", 6379)),
+                    )
+            elif isinstance(host, str):
+                address, url_credentials = self._parse_url(host)
+                credentials = url_credentials or credentials
             else:
                 h, p = host[0], host[1] if len(host) > 1 else 6379
-                node = NodeAddress(str(h), int(p))
-            addresses.append(node)
+                address = NodeAddress(str(h), int(p))
+            addresses.append(address)
         return GlideClient(  # type: ignore[abstract]
-            GlideClientConfiguration(addresses=addresses, **self.client_kwargs)
+            GlideClientConfiguration(
+                addresses=addresses, credentials=credentials, **self.client_kwargs
+            )
         )
+
+    @staticmethod
+    def _parse_url(url: str) -> tuple[NodeAddress, Any | None]:
+        """Parse a ``redis://``/``valkey://`` URL into a node address and,
+        when present, server credentials."""
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("redis", "rediss", "valkey", "valkeys", "unix"):
+            raise ValueError(f"Unsupported channel layer URL scheme: {url!r}")
+        credentials = None
+        if parsed.password is not None:
+            credentials = ServerCredentials(
+                username=parsed.username or None, password=parsed.password
+            )
+        if parsed.scheme == "unix":
+            return NodeAddress(parsed.path), credentials
+        return NodeAddress(parsed.hostname or "localhost", parsed.port or 6379), credentials
 
     def _get_client(self) -> GlideClient:
         if self._injected_client is not None:

@@ -27,18 +27,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
-        run: uv pip install -e '.[test]' --system
+        run: |
+          uv venv
+          uv pip install -e '.[test]' ruff mypy
       - name: Ruff
-        run: |
-          uv pip install ruff --system
-          ruff check .
+        run: uv run ruff check .
       - name: Mypy
-        run: |
-          uv pip install mypy --system
-          mypy channels_glide
+        run: uv run mypy channels_glide
       - name: Unit tests
-        run: pytest
+        run: uv run pytest
       - name: Integration tests
         env:
           VALKEY_URL: redis://localhost:6379/0
-        run: pytest tests/test_integration.py
+        run: uv run pytest tests/test_integration.py
