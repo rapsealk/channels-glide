@@ -43,6 +43,10 @@ def _bound_value(bound: Any) -> float | None:
 
 def _in_range(score: float, min_bound: Any, max_bound: bool | float | object) -> bool:
     def _check(bound: Any, low: bool) -> bool:
+        raw = getattr(bound, "value", bound)
+        if isinstance(raw, dict) and "score_arg" in raw:
+            # glide's InfBound enum (+/- infinity always contains)
+            return raw["score_arg"] in ("-inf", "+inf")
         if isinstance(bound, str):
             if bound in ("-inf", "+inf"):
                 return True
@@ -50,9 +54,8 @@ def _in_range(score: float, min_bound: Any, max_bound: bool | float | object) ->
         else:
             # Duck-type glide's ScoreBoundary (the fake must not isinstance
             # against its own mirror class).
-            value = getattr(bound, "value", bound)
+            value = float(raw)
             inclusive = getattr(bound, "is_inclusive", True)
-            value = float(value)
         if low:
             return score >= value if inclusive else score > value
         return score <= value if inclusive else score < value
