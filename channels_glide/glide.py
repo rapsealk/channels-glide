@@ -614,10 +614,10 @@ class GlideChannelLayer(BaseChannelLayer):
         return prefix + payload.hex()
 
     def deserialize(self, message: bytes) -> dict[str, Any]:
-        """Strip the uniqueness prefix and decode the message."""
+        """Strip the 12-hex-char uniqueness prefix, then decode the message."""
         try:
-            raw = bytes.fromhex(message.decode("ascii"))
-            decoded = msgpack.unpackb(raw[_RANDOM_PREFIX_LENGTH:], raw=False)
+            raw = bytes.fromhex(message.decode("ascii")[_RANDOM_PREFIX_LENGTH:])
+            decoded = msgpack.unpackb(raw, raw=False)
         except Exception:
             logger.error(
                 "deserialize failed: content[:48]=%r prefix_len=%d",
