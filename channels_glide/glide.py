@@ -300,10 +300,11 @@ class GlideChannelLayer(BaseChannelLayer):
         result = await client.bzpopmin([channel_key], timeout)
         if result is not None:
             _, member, timestamp = result
-            await client.zadd(backup_queue, {member: float(timestamp)})
-            member_bytes = (
-                member if isinstance(member, bytes) else str(member).encode("utf8")
-            )
+            # GLIDE's zadd str()s members — decode first so the backup queue
+            # stores the exact member, not its Python repr.
+            member_str = member.decode("ascii") if isinstance(member, bytes) else str(member)
+            await client.zadd(backup_queue, {member_str: float(timestamp)})
+            member_bytes = member if isinstance(member, bytes) else str(member).encode("utf8")
             return member_bytes
         return None
 
@@ -571,7 +572,7 @@ class GlideChannelLayer(BaseChannelLayer):
 
     def _map_channel_keys(
         self, channel_names: list[str], message: dict[str, Any]
-    ) -> tuple[list[str], dict[str, bytes], dict[str, int]]:
+    ) -> tuple[list[str], dict[str, str], dict[str, int]]:
         """
         Map every channel name to its queue key, deduplicating channels that
         share a non-local key: each unique key gets one serialized message
@@ -601,17 +602,22 @@ class GlideChannelLayer(BaseChannelLayer):
 
     ### Serialization ###
 
-    def serialize(self, message: Any) -> bytes:
-        """Serialize a message, prefixing it so identical messages stay
-        unique members of their sorted set."""
-        prefix = uuid.uuid4().hex[:_RANDOM_PREFIX_LENGTH].encode("ascii")
+    def serialize(self, message: Any) -> str:
+        """
+        Serialize a message to a hex string, prefixing it so identical
+        messages stay unique members of their sorted set. Pure hex because
+        GLIDE's zadd str()s members — arbitrary bytes would be stored as
+        their Python repr.
+        """
+        prefix = uuid.uuid4().hex[:_RANDOM_PREFIX_LENGTH]
         payload: bytes = msgpack.packb(message, default=_encode_datetime, use_bin_type=True)
-        return prefix + payload
+        return prefix + payload.hex()
 
     def deserialize(self, message: bytes) -> dict[str, Any]:
         """Strip the uniqueness prefix and decode the message."""
         try:
-            decoded = msgpack.unpackb(message[_RANDOM_PREFIX_LENGTH:], raw=False)
+            raw = bytes.fromhex(message.decode("ascii"))
+            decoded = msgpack.unpackb(raw[_RANDOM_PREFIX_LENGTH:], raw=False)
         except Exception:
             logger.error(
                 "deserialize failed: content[:48]=%r prefix_len=%d",
