@@ -191,7 +191,7 @@ class GlideChannelLayer(BaseChannelLayer):
         # back into the main queue before its cleanup has completed
         self.receive_clean_locks = ChannelLock()
 
-    def _build_client(self) -> GlideClient:
+    async def _build_client(self) -> GlideClient:
         addresses: list[NodeAddress] = []
         credentials = None
         for host in self.hosts:
@@ -212,7 +212,10 @@ class GlideChannelLayer(BaseChannelLayer):
                 h, p = host[0], host[1] if len(host) > 1 else 6379
                 address = NodeAddress(str(h), int(p))
             addresses.append(address)
-        return GlideClient(  # type: ignore[abstract]
+        # valkey-glide requires the async factory: the bare constructor never
+        # creates the Rust client and every command fails with a cryptic
+        # "initializer for ctype 'void *'" TypeError.
+        return await GlideClient.create(  # type: ignore[abstract]
             GlideClientConfiguration(
                 addresses=addresses, credentials=credentials, **self.client_kwargs
             )
@@ -234,11 +237,11 @@ class GlideChannelLayer(BaseChannelLayer):
             return NodeAddress(parsed.path), credentials
         return NodeAddress(parsed.hostname or "localhost", parsed.port or 6379), credentials
 
-    def _get_client(self) -> GlideClient:
+    async def _get_client(self) -> GlideClient:
         if self._injected_client is not None:
             return self._injected_client
         if self._client is None:
-            self._client = self._build_client()
+            self._client = await self._build_client()
         return self._client
 
     ### Channel layer API ###
@@ -262,7 +265,7 @@ class GlideChannelLayer(BaseChannelLayer):
         # Write out the message into an expiring sorted set (avoids big
         # items living in a plain list)
         channel_key = self.prefix + channel_non_local_name
-        client = self._get_client()
+        client = await self._get_client()
         # Discard old messages based on expiry
         await client.zremrangebyscore(
             channel_key,
@@ -287,7 +290,7 @@ class GlideChannelLayer(BaseChannelLayer):
         queue. In case of cancellation, make sure the message is not lost.
         """
         backup_queue = self._backup_channel_name(channel_key)
-        client = self._get_client()
+        client = await self._get_client()
         # Cancellation doesn't matter here — the script is atomic and
         # non-destructive; it only restores already-backed-up messages.
         await client.invoke_script(_CLEANUP_SCRIPT, args=[channel_key, backup_queue])
@@ -307,7 +310,7 @@ class GlideChannelLayer(BaseChannelLayer):
         Pop the oldest message off the channel backup queue. The result
         isn't interesting as it was already processed.
         """
-        client = self._get_client()
+        client = await self._get_client()
         await client.zpopmin(self._backup_channel_name(channel_key))
 
     async def receive(self, channel: str) -> dict[str, Any]:
@@ -485,7 +488,7 @@ class GlideChannelLayer(BaseChannelLayer):
         # Make sure all channel cleaners have finished before removing
         # keys from under their feet.
         await self.wait_received()
-        client = self._get_client()
+        client = await self._get_client()
         await client.invoke_script(_FLUSH_SCRIPT, args=[self.prefix + "*"])
 
     async def close(self) -> None:
@@ -513,7 +516,7 @@ class GlideChannelLayer(BaseChannelLayer):
         assert self.require_valid_group_name(group), "Group name not valid"
         assert self.require_valid_channel_name(channel), "Channel name not valid"
         group_key = self._group_key(group)
-        client = self._get_client()
+        client = await self._get_client()
         # Add to the group sorted set with creation time as score
         await client.zadd(group_key, {channel: time.time()})
         # Expire with group_expiry, since everything in it at this point is
@@ -527,7 +530,7 @@ class GlideChannelLayer(BaseChannelLayer):
         """
         assert self.require_valid_group_name(group), "Group name not valid"
         assert self.require_valid_channel_name(channel), "Channel name not valid"
-        client = self._get_client()
+        client = await self._get_client()
         await client.zrem(self._group_key(group), [channel])
 
     async def group_send(self, group: str, message: dict[str, Any]) -> None:
@@ -536,7 +539,7 @@ class GlideChannelLayer(BaseChannelLayer):
         """
         assert self.require_valid_group_name(group), "Group name not valid"
         key = self._group_key(group)
-        client = self._get_client()
+        client = await self._get_client()
         # Discard old channels based on group_expiry
         await client.zremrangebyscore(
             key, ScoreBoundary(0), ScoreBoundary(int(time.time()) - self.group_expiry)
